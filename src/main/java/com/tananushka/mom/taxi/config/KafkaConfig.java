@@ -16,9 +16,11 @@ import org.springframework.kafka.core.DefaultKafkaConsumerFactory;
 import org.springframework.kafka.core.DefaultKafkaProducerFactory;
 import org.springframework.kafka.core.KafkaTemplate;
 import org.springframework.kafka.core.ProducerFactory;
+import org.springframework.kafka.listener.ContainerProperties;
 import org.springframework.kafka.listener.KafkaListenerErrorHandler;
 import org.springframework.kafka.support.serializer.JsonDeserializer;
 import org.springframework.kafka.support.serializer.JsonSerializer;
+import org.springframework.kafka.transaction.KafkaTransactionManager;
 
 import java.util.HashMap;
 import java.util.Map;
@@ -37,26 +39,44 @@ public class KafkaConfig {
     @Value("${spring.kafka.consumer.group-id}")
     private String consumerGroupId;
 
+    @Value("${spring.kafka.consumer.enable-auto-commit}")
+    private boolean enableAutoCommit;
+
+    @Value("${spring.kafka.consumer.isolation.level}")
+    private String isolationLevel;
+
     @Bean
-    public ProducerFactory<String, VehicleSignal> producerFactory() {
+    public ProducerFactory<String, VehicleSignal> vehicleSignalProducerFactory() {
         Map<String, Object> configProps = getProducerConfigProps();
+        configProps.put(ProducerConfig.TRANSACTIONAL_ID_CONFIG, "vehicle-signal-producer-transactional-id");
         return new DefaultKafkaProducerFactory<>(configProps);
     }
 
     @Bean(name = "kafkaVehicleSignalTemplate")
     public KafkaTemplate<String, VehicleSignal> kafkaVehicleSignalTemplate() {
-        return new KafkaTemplate<>(producerFactory());
+        return new KafkaTemplate<>(vehicleSignalProducerFactory());
     }
 
     @Bean
     public ProducerFactory<String, Double> doubleProducerFactory() {
         Map<String, Object> configProps = getProducerConfigProps();
+        configProps.put(ProducerConfig.TRANSACTIONAL_ID_CONFIG, "double-producer-transactional-id");
         return new DefaultKafkaProducerFactory<>(configProps);
     }
 
     @Bean(name = "kafkaDoubleTemplate")
     public KafkaTemplate<String, Double> kafkaDoubleTemplate() {
         return new KafkaTemplate<>(doubleProducerFactory());
+    }
+
+    @Bean
+    public KafkaTransactionManager<String, VehicleSignal> kafkaTransactionManager() {
+        return new KafkaTransactionManager<>(vehicleSignalProducerFactory());
+    }
+
+    @Bean
+    public KafkaTransactionManager<String, Double> kafkaDoubleTransactionManager() {
+        return new KafkaTransactionManager<>(doubleProducerFactory());
     }
 
     @Bean
@@ -68,6 +88,7 @@ public class KafkaConfig {
     public ConcurrentKafkaListenerContainerFactory<String, VehicleSignal> kafkaListenerContainerFactory() {
         ConcurrentKafkaListenerContainerFactory<String, VehicleSignal> factory = new ConcurrentKafkaListenerContainerFactory<>();
         factory.setConsumerFactory(consumerFactory());
+        factory.getContainerProperties().setAckMode(ContainerProperties.AckMode.MANUAL_IMMEDIATE);
         return factory;
     }
 
@@ -80,6 +101,7 @@ public class KafkaConfig {
     public ConcurrentKafkaListenerContainerFactory<String, Double> doubleKafkaListenerContainerFactory() {
         ConcurrentKafkaListenerContainerFactory<String, Double> factory = new ConcurrentKafkaListenerContainerFactory<>();
         factory.setConsumerFactory(doubleConsumerFactory());
+        factory.getContainerProperties().setAckMode(ContainerProperties.AckMode.MANUAL_IMMEDIATE);
         return factory;
     }
 
@@ -106,6 +128,8 @@ public class KafkaConfig {
         configProps.put(ConsumerConfig.KEY_DESERIALIZER_CLASS_CONFIG, StringDeserializer.class);
         configProps.put(ConsumerConfig.VALUE_DESERIALIZER_CLASS_CONFIG, JsonDeserializer.class);
         configProps.put(JsonDeserializer.TRUSTED_PACKAGES, "*");
+        configProps.put(ConsumerConfig.ENABLE_AUTO_COMMIT_CONFIG, enableAutoCommit);
+        configProps.put(ConsumerConfig.ISOLATION_LEVEL_CONFIG, isolationLevel);
         return configProps;
     }
 }

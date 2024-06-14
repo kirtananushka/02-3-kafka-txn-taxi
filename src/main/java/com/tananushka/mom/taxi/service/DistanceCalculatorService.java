@@ -5,7 +5,11 @@ import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.kafka.annotation.KafkaListener;
 import org.springframework.kafka.core.KafkaTemplate;
+import org.springframework.kafka.support.Acknowledgment;
+import org.springframework.kafka.transaction.KafkaTransactionManager;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Transactional;
+import org.springframework.transaction.support.TransactionTemplate;
 
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
@@ -14,17 +18,30 @@ import java.util.concurrent.ConcurrentHashMap;
 @Slf4j
 @RequiredArgsConstructor
 public class DistanceCalculatorService {
+
     private final Map<String, Double> distanceMap = new ConcurrentHashMap<>();
     private final Map<String, VehicleSignal> lastLocationMap = new ConcurrentHashMap<>();
     private final KafkaTemplate<String, Double> kafkaDoubleTemplate;
+    private final KafkaTransactionManager<String, Double> kafkaTransactionManager;
 
     @KafkaListener(topics = "input", containerFactory = "kafkaListenerContainerFactory", errorHandler = "kafkaListenerErrorHandler")
-    public void processSignal(VehicleSignal signal) {
-        VehicleSignal lastLocation = lastLocationMap.get(signal.getVehicleId());
-        double distance = lastLocation != null ? calculateDistance(lastLocation, signal) : 0.0;
-        distanceMap.compute(signal.getVehicleId(), (key, oldDistance) -> oldDistance == null ? distance : oldDistance + distance);
-        lastLocationMap.put(signal.getVehicleId(), signal);
-        kafkaDoubleTemplate.send("output", signal.getVehicleId(), distanceMap.get(signal.getVehicleId()));
+    @Transactional(transactionManager = "kafkaTransactionManager")
+    public void processSignal(VehicleSignal signal, Acknowledgment acknowledgment) {
+        TransactionTemplate transactionTemplate = new TransactionTemplate(kafkaTransactionManager);
+        transactionTemplate.execute(status -> {
+            try {
+                VehicleSignal lastLocation = lastLocationMap.get(signal.getVehicleId());
+                double distance = lastLocation != null ? calculateDistance(lastLocation, signal) : 0.0;
+                distanceMap.compute(signal.getVehicleId(), (key, oldDistance) -> oldDistance == null ? distance : oldDistance + distance);
+                lastLocationMap.put(signal.getVehicleId(), signal);
+                kafkaDoubleTemplate.send("output", signal.getVehicleId(), distanceMap.get(signal.getVehicleId()));
+                acknowledgment.acknowledge();
+            } catch (Exception e) {
+                log.error("Error processing signal for vehicle {}: {}", signal.getVehicleId(), e.getMessage());
+                status.setRollbackOnly();
+            }
+            return null;
+        });
     }
 
     private double calculateDistance(VehicleSignal lastSignal, VehicleSignal currentSignal) {
